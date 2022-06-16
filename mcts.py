@@ -135,7 +135,9 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--engine', required=True, help='chess variant engine path, e.g., to Fairy-Stockfish')
     parser.add_argument('-o', '--ucioptions', type=lambda kv: kv.split("="), action='append', default=[],
                         help='UCI option as key=value pair. Repeat to add more options.')
-    parser.add_argument('-v', '--variant', default='chess', help='variant to run search on')
+    parser.add_argument('-v', '--variant', default='chess', help='variant to analyze')
+    parser.add_argument('-f', '--fen', help='FEN to analyze')
+    parser.add_argument('-m', '--moves', default='', help='moves from FEN')
     parser.add_argument('-r', '--rollouts', type=int, default=100, help='number of rollouts')
     parser.add_argument('-d', '--depth', type=int, default=None, help='engine search depth')
     parser.add_argument('-t', '--movetime', type=int, default=None, help='engine search movetime (ms)')
@@ -151,10 +153,10 @@ if __name__ == '__main__':
         parser.error('At least one of --depth and --movetime is required.')
     options = dict(args.ucioptions)
     evaluator = LeafEvaluator(args.engine, options, limits)
-    sf.set_option("VariantPath", options.get("VariantPath", ""))
+    sf.set_option('VariantPath', options.get('VariantPath', ''))
 
     # UCT search
-    root = GameState()
+    root = GameState(args.variant, args.fen, args.moves.split(' ') if args.moves else None)
     tick = time.time()
     root_node, bestmove = uct_search(root, args.rollouts, evaluator)
     tock = time.time()
