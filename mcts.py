@@ -2,6 +2,7 @@ import argparse
 import collections
 import math
 import resource
+import time
 
 import numpy as np
 import pyffish as sf
@@ -70,6 +71,12 @@ class UCTNode():
             current.total_value += value_estimate * -current.game_state.side_to_move
             current = current.parent
 
+    def __repr__(self):
+        moves = sorted(zip(self.game_state.legal_moves, self.child_Q(), self.child_number_visits),
+                       key=lambda x: x[2], reverse=True)
+        return ('ply {} - '.format(len(self.game_state.move_stack))
+                + ', '.join('{}: {:.4f} ({:.0f})'.format(*i) for i in moves if i[2]))
+
 
 class PreRootNode(object):
     def __init__(self):
@@ -78,31 +85,36 @@ class PreRootNode(object):
         self.child_number_visits = collections.defaultdict(float)
 
 
-def uct_search(game_state, num_reads):
-    root = UCTNode(game_state, move=None, parent=PreRootNode())
-    for _ in range(num_reads):
-        leaf = root.select_leaf()
-        child_priors, value_estimate = Engine.evaluate(leaf.game_state)
-        if child_priors is not None:
-            leaf.expand(child_priors)
-        leaf.backup(value_estimate)
-    return root, np.argmax(root.child_number_visits)
+class LeafEvaluator():
+    def __init__(self, path, options, limits):
+        self.engine = uci.Engine([path], options)
+        self.engine.setoption('UCI_Variant', args.variant)
+        self.engine.newgame()
+        self.limits = limits
 
-
-class Engine():
-    @classmethod
     def evaluate(self, game_state):
         num_moves = len(game_state.legal_moves)
         if num_moves:
             priors = np.ones([num_moves], dtype=np.float32) * 4
-            engine.position(game_state.fen, game_state.move_stack)
-            bestmove, evaluation = engine.go(**limits)
+            self.engine.position(game_state.fen, game_state.move_stack)
+            bestmove, evaluation = self.engine.go(**self.limits)
             priors[game_state.legal_moves.index(bestmove)] = 0
             return priors, evaluation * game_state.side_to_move
         else:
             priors = None
             result = sf.game_result(game_state.variant, game_state.fen, game_state.move_stack)
             return priors, (1 if result > 0 else -1 if result < 0 else 0) * game_state.side_to_move
+
+
+def uct_search(game_state, num_reads, evaluator):
+    root = UCTNode(game_state, move=None, parent=PreRootNode())
+    for _ in range(num_reads):
+        leaf = root.select_leaf()
+        child_priors, value_estimate = evaluator.evaluate(leaf.game_state)
+        if child_priors is not None:
+            leaf.expand(child_priors)
+        leaf.backup(value_estimate)
+    return root, np.argmax(root.child_number_visits)
 
 
 class GameState():
@@ -129,38 +141,33 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--movetime', type=int, default=None, help='engine search movetime (ms)')
     args = parser.parse_args()
 
+    # Init engine
+    limits = dict()
+    if args.depth:
+        limits['depth'] = args.depth
+    if args.movetime:
+        limits['movetime'] = args.movetime
+    if not limits:
+        parser.error('At least one of --depth and --movetime is required.')
+    options = dict(args.ucioptions)
+    evaluator = LeafEvaluator(args.engine, options, limits)
+    sf.set_option("VariantPath", options.get("VariantPath", ""))
 
-engine = uci.Engine([args.engine], dict(args.ucioptions))
-sf.set_option("VariantPath", engine.options.get("VariantPath", ""))
-limits = dict()
-if args.depth:
-    limits['depth'] = args.depth
-if args.movetime:
-    limits['movetime'] = args.movetime
-if not limits:
-    parser.error('At least one of --depth and --movetime is required.')
-engine.setoption('UCI_Variant', args.variant)
-engine.newgame()
-
-
-import time
-tick = time.time()
-root = GameState()
-root_node, bestmove = uct_search(root, args.rollouts)
-print(root_node.game_state.legal_moves[bestmove])
-print(dict(zip(root_node.game_state.legal_moves, root_node.child_Q())))
-print(dict(zip(root_node.game_state.legal_moves, root_node.child_number_visits)))
-current = root_node
-while current.is_expanded:
-    best_move = np.argmax(current.child_number_visits)
-    print(current.game_state.legal_moves[best_move])
-    print(current.child_number_visits[best_move])
-    print(dict(zip(current.game_state.legal_moves, current.child_number_visits)))
-    if best_move in current.children:
-        current = current.children[best_move]
-    else:
-        break
-
-tock = time.time()
-print('Runtime: {}'.format(tock - tick))
-print('Memory: {} KB'.format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))
+    # UCT search
+    root = GameState()
+    tick = time.time()
+    root_node, bestmove = uct_search(root, args.rollouts, evaluator)
+    tock = time.time()
+    print('Runtime: {:.3f} s'.format(tock - tick))
+    print('Memory: {} KB\n'.format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))
+    pv = []
+    current = root_node
+    while current.is_expanded:
+        best_move = np.argmax(current.child_number_visits)
+        pv.append(current.game_state.legal_moves[best_move])
+        if best_move in current.children:
+            print(current)
+            current = current.children[best_move]
+        else:
+            break
+    print('\nPV: ' + ' '.join(pv))
