@@ -41,8 +41,8 @@ class UCTNode():
         return self.child_total_value / (1 + self.child_number_visits)
 
     def child_U(self):
-        return math.sqrt(self.number_visits) * (
-                self.child_priors / (1 + self.child_number_visits))
+        # use the bestmove information as a penalty on exploration for UCT
+        return np.sqrt(math.log(self.number_visits + 1) / (1 + self.child_number_visits + self.child_priors))
 
     def best_child(self):
         return np.argmax(self.child_Q() + self.child_U())
@@ -94,10 +94,10 @@ class Engine():
     def evaluate(self, game_state):
         num_moves = len(game_state.legal_moves)
         if num_moves:
-            priors = np.ones([num_moves], dtype=np.float32) / num_moves
+            priors = np.ones([num_moves], dtype=np.float32) * 4
             engine.position(game_state.fen, game_state.move_stack)
             bestmove, evaluation = engine.go(**limits)
-            priors[game_state.legal_moves.index(bestmove)] *= 2
+            priors[game_state.legal_moves.index(bestmove)] = 0
             return priors, evaluation * game_state.side_to_move
         else:
             priors = None
