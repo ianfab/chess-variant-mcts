@@ -6,6 +6,7 @@ import time
 
 import numpy as np
 import pyffish as sf
+from tqdm import tqdm
 
 import uci
 
@@ -87,13 +88,12 @@ class UCTNode():
                 break
         return pv
 
-    def traverse(self, apply_all=lambda x: None, apply_leaf=lambda x: None):
-        apply_all(self)
-        if not self.children:
-            apply_leaf(self)
-            return
-        for child in sorted(self.children.values(), key=lambda x: x.number_visits, reverse=True):
-            child.traverse(apply_all, apply_leaf)
+    def traverse(self, apply=lambda x: True):
+        if apply(self):
+            if not self.children:
+                return
+            for child in sorted(self.children.values(), key=lambda x: x.number_visits, reverse=True):
+                child.traverse(apply)
 
     def __repr__(self):
         moves = sorted(zip(self.game_state.legal_moves, self.child_Q(), self.child_number_visits),
@@ -107,6 +107,10 @@ class PreRootNode(object):
         self.parent = None
         self.child_total_value = collections.defaultdict(float)
         self.child_number_visits = collections.defaultdict(float)
+
+    @property
+    def number_visits(self):
+        return sum(self.child_number_visits.values())
 
 
 class EnginePolicy():
@@ -143,7 +147,7 @@ class RandomPolicy():
 
 def uct_search(game_state, num_reads, policy):
     root = UCTNode(game_state, move=None, parent=PreRootNode())
-    for _ in range(num_reads):
+    for _ in tqdm(range(num_reads)):
         leaf = root.select_leaf()
         child_priors, value_estimate = policy.evaluate(leaf.game_state)
         if child_priors is not None:
@@ -180,6 +184,9 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--depth', type=int, default=None, help='engine search depth')
     parser.add_argument('-t', '--movetime', type=int, default=None, help='engine search movetime (ms)')
     parser.add_argument('-p', '--print-tree', action='store_true', help='print search tree')
+    parser.add_argument('-b', '--export-book', help='export as EPD book')
+    parser.add_argument('--min-visits', type=int, default=5, help='only print/export nodes with minimum visit count')
+    parser.add_argument('--min-ratio', type=float, default=0.03, help='only print/export nodes with minimum visit ratio')
     args = parser.parse_args()
 
     # Init engine
@@ -210,4 +217,19 @@ if __name__ == '__main__':
     print('PV: {}'.format(' '.join(root_node.pv())))
     print(root_node)
     if args.print_tree:
-        root_node.traverse(apply_all=lambda node: print('{}: {}'.format(' '.join(node.game_state.move_stack), node.number_visits)))
+        def print_node(node):
+            if node.number_visits >= args.min_visits and node.number_visits / node.parent.number_visits >= args.min_ratio:
+                print('{}: {:.0f} ({:.3f})'.format(' '.join(node.game_state.move_stack), node.number_visits,
+                                                    node.total_value / node.number_visits))
+                return True
+            return False
+        print('\nTree')
+        root_node.traverse(apply=print_node)
+    if args.export_book:
+        with open(args.export_book, 'w') as epd:
+            def write_epd(node):
+                if node.number_visits >= args.min_visits and node.number_visits / node.parent.number_visits >= args.min_ratio:
+                    epd.write(node.game_state.get_fen() + '\n')
+                    return True
+                return False
+            root_node.traverse(apply=write_epd)

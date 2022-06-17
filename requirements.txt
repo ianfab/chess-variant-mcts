@@ -1,2 +1,3 @@
 pyffish
 numpy
+tqdm
