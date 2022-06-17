@@ -17,10 +17,10 @@ class UCTNode():
         self.is_expanded = False
         self.parent = parent
         self.children = {}
-        num_moves = len(self.game_state.legal_moves)
-        self.child_priors = np.zeros([num_moves], dtype=np.float32)
-        self.child_total_value = np.zeros([num_moves], dtype=np.float32)
-        self.child_number_visits = np.zeros([num_moves], dtype=np.float32)
+        self.num_moves = len(self.game_state.legal_moves)
+        self.child_priors = np.zeros([self.num_moves], dtype=np.float32)
+        self.child_total_value = np.zeros([self.num_moves], dtype=np.float32)
+        self.child_number_visits = np.zeros([self.num_moves], dtype=np.float32)
 
     @property
     def number_visits(self):
@@ -43,7 +43,7 @@ class UCTNode():
 
     def child_U(self):
         # use the bestmove information as a penalty on exploration for UCT
-        return np.sqrt(math.log(self.number_visits + 1) / (1 + self.child_number_visits + self.child_priors))
+        return 0.5 * np.sqrt(math.log(self.number_visits + 1) / (1 + self.child_number_visits + self.child_priors))
 
     def best_child(self):
         return np.argmax(self.child_Q() + self.child_U())
@@ -71,11 +71,35 @@ class UCTNode():
             current.total_value += value_estimate * -current.game_state.side_to_move
             current = current.parent
 
+    def best_move(self):
+        # pick best score in case of equal visit count
+        return np.argmax(self.child_number_visits + self.child_Q())
+
+    def pv(self):
+        current = self
+        pv = []
+        while current.is_expanded:
+            best_move = current.best_move()
+            pv.append(current.game_state.legal_moves[best_move])
+            if best_move in current.children:
+                current = current.children[best_move]
+            else:
+                break
+        return pv
+
+    def traverse(self, apply_all=lambda x: None, apply_leaf=lambda x: None):
+        apply_all(self)
+        if not self.children:
+            apply_leaf(self)
+            return
+        for child in sorted(self.children.values(), key=lambda x: x.number_visits, reverse=True):
+            child.traverse(apply_all, apply_leaf)
+
     def __repr__(self):
         moves = sorted(zip(self.game_state.legal_moves, self.child_Q(), self.child_number_visits),
-                       key=lambda x: x[2], reverse=True)
-        return ('ply {} - '.format(len(self.game_state.move_stack))
-                + ', '.join('{}: {:.4f} ({:.0f})'.format(*i) for i in moves if i[2]))
+                       key=lambda x: x[2] + x[1], reverse=True)
+        return 'Position: {}\nMoves: {}'.format(self.game_state.get_fen(),
+                ', '.join('{}: {:.4f} ({:.0f})'.format(*i) for i in moves if i[2]))
 
 
 class PreRootNode(object):
@@ -95,11 +119,12 @@ class LeafEvaluator():
     def evaluate(self, game_state):
         num_moves = len(game_state.legal_moves)
         if num_moves:
-            priors = np.ones([num_moves], dtype=np.float32) * 4
             self.engine.position(game_state.fen, game_state.move_stack)
-            bestmove, evaluation = self.engine.go(**self.limits)
-            priors[game_state.legal_moves.index(bestmove)] = 0
-            return priors, evaluation * game_state.side_to_move
+            multipv = self.engine.go(**self.limits)
+            priors = np.ones([num_moves], dtype=np.float32) * multipv[1]['depth']
+            for info in multipv.values():
+                priors[game_state.legal_moves.index(info['pv'][0])] = max(multipv[1]['score'] - info['score'], 0) * info['depth']
+            return priors, multipv[1]['score'] * game_state.side_to_move
         else:
             priors = None
             result = sf.game_result(game_state.variant, game_state.fen, game_state.move_stack)
@@ -114,7 +139,7 @@ def uct_search(game_state, num_reads, evaluator):
         if child_priors is not None:
             leaf.expand(child_priors)
         leaf.backup(value_estimate)
-    return root, np.argmax(root.child_number_visits)
+    return root
 
 
 class GameState():
@@ -126,8 +151,11 @@ class GameState():
         self.legal_moves = sf.legal_moves(self.variant, self.fen, self.move_stack)
 
     def play(self, move):
-        moves = self.move_stack + [self.legal_moves[move]]
-        return GameState(self.variant, self.fen, moves)
+        new_move_stack = self.move_stack + [self.legal_moves[move]]
+        return GameState(self.variant, self.fen, new_move_stack)
+
+    def get_fen(self):
+        return sf.get_fen(self.variant, self.fen, self.move_stack)
 
 
 if __name__ == '__main__':
@@ -141,6 +169,7 @@ if __name__ == '__main__':
     parser.add_argument('-r', '--rollouts', type=int, default=100, help='number of rollouts')
     parser.add_argument('-d', '--depth', type=int, default=None, help='engine search depth')
     parser.add_argument('-t', '--movetime', type=int, default=None, help='engine search movetime (ms)')
+    parser.add_argument('-p', '--print-tree', action='store_true', help='print search tree')
     args = parser.parse_args()
 
     # Init engine
@@ -150,26 +179,20 @@ if __name__ == '__main__':
     if args.movetime:
         limits['movetime'] = args.movetime
     if not limits:
-        parser.error('At least one of --depth and --movetime is required.')
+        limits['movetime'] = int(math.sqrt(args.rollouts))
     options = dict(args.ucioptions)
+    options.setdefault('multipv', '3')
     evaluator = LeafEvaluator(args.engine, options, limits)
     sf.set_option('VariantPath', options.get('VariantPath', ''))
 
     # UCT search
-    root = GameState(args.variant, args.fen, args.moves.split(' ') if args.moves else None)
-    tick = time.time()
-    root_node, bestmove = uct_search(root, args.rollouts, evaluator)
-    tock = time.time()
-    print('Runtime: {:.3f} s'.format(tock - tick))
-    print('Memory: {} KB\n'.format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))
-    pv = []
-    current = root_node
-    while current.is_expanded:
-        best_move = np.argmax(current.child_number_visits)
-        pv.append(current.game_state.legal_moves[best_move])
-        if best_move in current.children:
-            print(current)
-            current = current.children[best_move]
-        else:
-            break
-    print('\nPV: ' + ' '.join(pv))
+    root_pos = GameState(args.variant, args.fen, args.moves.split(' ') if args.moves else None)
+    start = time.perf_counter()
+    root_node = uct_search(root_pos, args.rollouts, evaluator)
+    end = time.perf_counter()
+    print('Runtime: {:.3f} s'.format(end - start))
+    print('Memory: {} KB'.format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))
+    print('PV: {}'.format(' '.join(root_node.pv())))
+    print(root_node)
+    if args.print_tree:
+        root_node.traverse(apply_all=lambda node: print('{}: {}'.format(' '.join(node.game_state.move_stack), node.number_visits)))

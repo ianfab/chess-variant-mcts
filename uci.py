@@ -5,6 +5,9 @@ import math
 
 
 class Engine():
+    KEYWORDS = {'depth': int, 'seldepth': int, 'multipv': int, 'nodes': int,
+                'nps': int, 'time': int, 'score': list, 'pv': list}
+
     def __init__(self, args, options=None):
         self.process = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
         self.lock = threading.Lock()
@@ -35,41 +38,38 @@ class Engine():
         moves = 'moves {}'.format(' '.join(moves)) if moves else ''
         self.write('position {} {}\n'.format(sfen, moves))
 
+    @staticmethod
+    def _score(score):
+        if score[0] == 'cp':
+            return math.tanh(float(score[1]) / 1000)
+        else:
+            assert score[0] == 'mate'
+            return -1 if score[1].startswith('-') else 1
+
     def go(self, **limits):
         self.write('go {}\n'.format(' '.join(str(item) for key_value in limits.items() for item in key_value)))
-        bestmove = None
-        bestscore = None
-        KEYWORDS = {'depth': int, 'seldepth': int, 'multipv': int, 'nodes': int,
-                    'nps': int, 'time': int, 'score': list, 'pv': list}
-
+        multipv = {}
         for line in self.read('bestmove'):
             items = line.split()
             if not items:
                 continue
-            elif items[0] == 'bestmove':
-                bestmove = items[1]
             elif items[0] == 'info' and len(items) > 1 and items[1] != 'string' and 'score' in items:
                 key = None
                 values = []
                 info = {}
                 for i in items[1:] + ['']:
-                    if not i or i in KEYWORDS:
+                    if not i or i in self.KEYWORDS:
                         if key:
-                            if values and not issubclass(KEYWORDS[key], Iterable):
+                            if values and not issubclass(self.KEYWORDS[key], Iterable):
                                 values = values[0]
-                            info[key] = KEYWORDS[key](values)
+                            info[key] = self.KEYWORDS[key](values)
                         key = i
                         values = []
                     else:
                         values.append(i)
-                if info.get('multipv', 1) == 1:
-                    bestscore = info.get('score')
-        if bestscore[0] == 'cp':
-            bestscore = math.tanh(float(bestscore[1]) / 1000)
-        else:
-            assert bestscore[0] == 'mate'
-            bestscore = -1 if bestscore[1].startswith('-') else 1
-        return bestmove, bestscore
+                info['score'] = self._score(info['score'])
+                multipv[info.get('multipv', 1)] = info
+        return multipv
 
     def stop(self):
         self.write('stop\n')
@@ -91,6 +91,5 @@ if __name__ == '__main__':
     e = Engine(sys.argv[1:])
     e.newgame()
     e.position()
-    bestmove, infos = e.go(depth=10)
-    print(bestmove)
-    print(infos[-1])
+    search_result = e.go(depth=10)
+    print(search_result)
