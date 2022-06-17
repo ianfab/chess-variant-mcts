@@ -4,7 +4,7 @@ This project provides an MCTS/UCT search based on [brilee/python_uct](https://gi
 
 Possible use cases can be the generation of opening books, identification of critical lines, and the like.
 
-The recommended engine to use with this project is [Fairy-Stockfish](https://github.com/ianfab/Fairy-Stockfish), but in principle any UCI chess variant engine could be used, as well as with a random policy in case no engine is provided.
+The recommended engine to use with this project is [Fairy-Stockfish](https://github.com/ianfab/Fairy-Stockfish), but in principle any UCI chess variant engine could be used, or a random policy in case no engine is provided.
 
 ## Setup
 The project requires at least python3.5 as well as the dependencies from the `requirements.txt`. Install them using
