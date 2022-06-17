@@ -181,9 +181,11 @@ if __name__ == '__main__':
     if not limits:
         limits['movetime'] = int(math.sqrt(args.rollouts))
     options = dict(args.ucioptions)
+    sf.set_option('VariantPath', options.get('VariantPath', ''))
+    if args.variant not in sf.variants():
+        raise Exception('Variant {} not supported'.format(args.variant))
     options.setdefault('multipv', '3')
     evaluator = LeafEvaluator(args.engine, options, limits)
-    sf.set_option('VariantPath', options.get('VariantPath', ''))
 
     # UCT search
     root_pos = GameState(args.variant, args.fen, args.moves.split(' ') if args.moves else None)
