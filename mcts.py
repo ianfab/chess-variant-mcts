@@ -109,7 +109,7 @@ class PreRootNode(object):
         self.child_number_visits = collections.defaultdict(float)
 
 
-class LeafEvaluator():
+class EnginePolicy():
     def __init__(self, path, options, limits):
         self.engine = uci.Engine([path], options)
         self.engine.setoption('UCI_Variant', args.variant)
@@ -126,16 +126,26 @@ class LeafEvaluator():
                 priors[game_state.legal_moves.index(info['pv'][0])] = max(multipv[1]['score'] - info['score'], 0) * info['depth']
             return priors, multipv[1]['score'] * game_state.side_to_move
         else:
-            priors = None
             result = sf.game_result(game_state.variant, game_state.fen, game_state.move_stack)
-            return priors, (1 if result > 0 else -1 if result < 0 else 0) * game_state.side_to_move
+            return None, (1 if result > 0 else -1 if result < 0 else 0) * game_state.side_to_move
 
 
-def uct_search(game_state, num_reads, evaluator):
+class RandomPolicy():
+    @staticmethod
+    def evaluate(game_state):
+        num_moves = len(game_state.legal_moves)
+        if num_moves:
+            return np.zeros([num_moves], dtype=np.float32), np.random.triangular(-1, 0, 1)
+        else:
+            result = sf.game_result(game_state.variant, game_state.fen, game_state.move_stack)
+            return None, (1 if result > 0 else -1 if result < 0 else 0) * game_state.side_to_move
+
+
+def uct_search(game_state, num_reads, policy):
     root = UCTNode(game_state, move=None, parent=PreRootNode())
     for _ in range(num_reads):
         leaf = root.select_leaf()
-        child_priors, value_estimate = evaluator.evaluate(leaf.game_state)
+        child_priors, value_estimate = policy.evaluate(leaf.game_state)
         if child_priors is not None:
             leaf.expand(child_priors)
         leaf.backup(value_estimate)
@@ -160,7 +170,7 @@ class GameState():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-e', '--engine', required=True, help='chess variant engine path, e.g., to Fairy-Stockfish')
+    parser.add_argument('-e', '--engine', help='chess variant engine path, e.g., to Fairy-Stockfish')
     parser.add_argument('-o', '--ucioptions', type=lambda kv: kv.split("="), action='append', default=[],
                         help='UCI option as key=value pair. Repeat to add more options.')
     parser.add_argument('-v', '--variant', default='chess', help='variant to analyze')
@@ -185,12 +195,15 @@ if __name__ == '__main__':
     if args.variant not in sf.variants():
         raise Exception('Variant {} not supported'.format(args.variant))
     options.setdefault('multipv', '3')
-    evaluator = LeafEvaluator(args.engine, options, limits)
+    if args.engine:
+        policy = EnginePolicy(args.engine, options, limits)
+    else:
+        policy = RandomPolicy()
 
     # UCT search
     root_pos = GameState(args.variant, args.fen, args.moves.split(' ') if args.moves else None)
     start = time.perf_counter()
-    root_node = uct_search(root_pos, args.rollouts, evaluator)
+    root_node = uct_search(root_pos, args.rollouts, policy)
     end = time.perf_counter()
     print('Runtime: {:.3f} s'.format(end - start))
     print('Memory: {} KB'.format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))
