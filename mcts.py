@@ -78,15 +78,13 @@ class UCTNode():
 
     def pv(self):
         current = self
-        pv = []
         while current.is_expanded:
             best_move = current.best_move()
-            pv.append(current.game_state.legal_moves[best_move])
             if best_move in current.children:
                 current = current.children[best_move]
             else:
                 break
-        return pv
+        return current.game_state.get_san_moves()
 
     def traverse(self, apply=lambda x: True):
         if apply(self):
@@ -96,7 +94,9 @@ class UCTNode():
                 child.traverse(apply)
 
     def __repr__(self):
-        moves = sorted(zip(self.game_state.legal_moves, self.child_Q(), self.child_number_visits),
+        fen = self.game_state.get_fen()
+        sans = [sf.get_san(self.game_state.variant, fen, m) for m in self.game_state.legal_moves]
+        moves = sorted(zip(sans, self.child_Q(), self.child_number_visits),
                        key=lambda x: x[2] + x[1], reverse=True)
         return 'Position: {}\nMoves: {}'.format(self.game_state.get_fen(),
                 ', '.join('{}: {:.4f} ({:.0f})'.format(*i) for i in moves if i[2]))
@@ -171,6 +171,9 @@ class GameState():
     def get_fen(self):
         return sf.get_fen(self.variant, self.fen, self.move_stack)
 
+    def get_san_moves(self):
+        return sf.get_san_moves(self.variant, self.fen, self.move_stack)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -219,7 +222,7 @@ if __name__ == '__main__':
     if args.print_tree:
         def print_node(node):
             if node.number_visits >= args.min_visits and node.number_visits / node.parent.number_visits >= args.min_ratio:
-                print('{}: {:.0f} ({:.3f})'.format(' '.join(node.game_state.move_stack), node.number_visits,
+                print('{}: {:.0f} ({:.3f})'.format(' '.join(node.game_state.get_san_moves()), node.number_visits,
                                                     node.total_value / node.number_visits))
                 return True
             return False
