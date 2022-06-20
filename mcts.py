@@ -1,7 +1,6 @@
 import argparse
 import collections
 import math
-import resource
 import time
 
 import numpy as np
@@ -216,7 +215,11 @@ if __name__ == '__main__':
     root_node = uct_search(root_pos, args.rollouts, policy)
     end = time.perf_counter()
     print('Runtime: {:.3f} s'.format(end - start))
-    print('Memory: {} KB'.format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))
+    try:
+        import resource
+        print('Memory: {} KB'.format(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss))
+    except ImportError:
+        pass
     print('PV: {}'.format(' '.join(root_node.pv())))
     print(root_node)
     if args.print_tree:
