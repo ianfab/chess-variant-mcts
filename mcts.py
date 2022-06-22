@@ -42,8 +42,7 @@ class UCTNode():
         return self.child_total_value / (1 + self.child_number_visits)
 
     def child_U(self):
-        # use the bestmove information as a penalty on exploration for UCT
-        return 0.5 * np.sqrt(math.log(self.number_visits + 1) / (1 + self.child_number_visits + self.child_priors))
+        return 0.2 * np.sqrt(math.log(self.number_visits + 1) / (1 + self.child_number_visits))
 
     def best_child(self):
         return np.argmax(self.child_Q() + self.child_U())
@@ -55,9 +54,10 @@ class UCTNode():
             current = current.maybe_add_child(best_move)
         return current
 
-    def expand(self, child_priors):
+    def expand(self, child_priors, initial_values):
         self.is_expanded = True
         self.child_priors = child_priors
+        self.child_total_value = initial_values
 
     def maybe_add_child(self, move):
         if move not in self.children:
@@ -124,13 +124,16 @@ class EnginePolicy():
         if num_moves:
             self.engine.position(game_state.fen, game_state.move_stack)
             multipv = self.engine.go(**self.limits)
-            priors = np.ones([num_moves], dtype=np.float32) * multipv[1]['depth']
+            max_score = multipv[1]['score']
+            min_score = min(s['score'] for s in multipv.values())
+            priors = np.full([num_moves], multipv[1]['depth'], dtype=np.float32)
+            values = np.full([num_moves], max(min_score - 2 * (max_score - min_score + 0.05), -1), dtype=np.float32)
             for info in multipv.values():
-                priors[game_state.legal_moves.index(info['pv'][0])] = max(multipv[1]['score'] - info['score'], 0) * info['depth']
-            return priors, multipv[1]['score'] * game_state.side_to_move
+                values[game_state.legal_moves.index(info['pv'][0])] = info['score']
+            return priors, values, max_score * game_state.side_to_move
         else:
             result = sf.game_result(game_state.variant, game_state.fen, game_state.move_stack)
-            return None, (1 if result > 0 else -1 if result < 0 else 0) * game_state.side_to_move
+            return None, None, (1 if result > 0 else -1 if result < 0 else 0) * game_state.side_to_move
 
 
 class RandomPolicy():
@@ -138,19 +141,19 @@ class RandomPolicy():
     def evaluate(game_state):
         num_moves = len(game_state.legal_moves)
         if num_moves:
-            return np.zeros([num_moves], dtype=np.float32), np.random.triangular(-1, 0, 1)
+            return np.zeros([num_moves], dtype=np.float32), np.zeros([num_moves], dtype=np.float32), np.random.triangular(-1, 0, 1)
         else:
             result = sf.game_result(game_state.variant, game_state.fen, game_state.move_stack)
-            return None, (1 if result > 0 else -1 if result < 0 else 0) * game_state.side_to_move
+            return None, None, (1 if result > 0 else -1 if result < 0 else 0) * game_state.side_to_move
 
 
 def uct_search(game_state, num_reads, policy):
     root = UCTNode(game_state, move=None, parent=PreRootNode())
     for _ in tqdm(range(num_reads)):
         leaf = root.select_leaf()
-        child_priors, value_estimate = policy.evaluate(leaf.game_state)
+        child_priors, initial_values, value_estimate = policy.evaluate(leaf.game_state)
         if child_priors is not None:
-            leaf.expand(child_priors)
+            leaf.expand(child_priors, initial_values)
         leaf.backup(value_estimate)
     return root
 
