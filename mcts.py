@@ -39,7 +39,8 @@ class UCTNode():
         self.parent.child_total_value[self.move] = value
 
     def child_Q(self):
-        return self.child_total_value / (1 + self.child_number_visits)
+        # use parent node eval as initial estimate
+        return (self.child_total_value - self.total_value / self.number_visits) / (1 + self.child_number_visits)
 
     def child_U(self):
         # use the bestmove information as a penalty on exploration for UCT
